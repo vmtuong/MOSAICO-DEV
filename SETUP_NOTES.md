@@ -50,9 +50,9 @@ Unit tests are fast and do not require a running Langfuse instance (they use moc
 
 This is the placeholder for instructions to set up Langfuse Integration Test.
 
-## 7. Rebuild the container
+## 7. Rebuild the Docker image
 
-During development, the container may not be up do date. You can rebuild mosaico-app ([instructions below](#rebuild-and-relaunch-mosaico-app-docker)).
+During development, the image may not be up do date. Please rebuild mosaico-app ([instructions below](#rebuild-and-relaunch-mosaico-app-docker)).
 
 ## 8. Add and search agent
 
@@ -75,6 +75,26 @@ curl -X POST http://localhost:8080/api/agents \
     }
   }'
 ```
+
+
+### Add a metamodel generation agent via `POST api/agents`
+
+```bash
+curl -X POST http://localhost:8080/api/agents \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "metamodel-generation-collaboration-agent",
+    "description": "Collaboration agent who should handle a query for generating a metamodel.",
+    "version": "1.0.0",
+    "role": "collaboration agent",
+    "objective": "coordinate solution agent and supervisor agent to generate and verify metamodel based on user description.",
+    "a2aAgentCardUrl": "http://localhost:12000/.well-known/agent-card.json",
+    "deployment": {
+      "mode": "ENDPOINT"
+    }
+  }'
+```
+
 
 ### Search agent by name via `GET api/agents/search/name`
 
@@ -124,24 +144,6 @@ See [AgentMCP.java](src/main/java/it/univaq/disim/mosaico/wp2/repository/mcp/Age
 
 
 ## 10. Full Demostration with the AI Coding Extension
-
-### Add a metamodel generation agent via `POST api/agents`
-
-```bash
-curl -X POST http://localhost:8080/api/agents \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "name": "metamodel-generation-collaboration-agent",
-    "description": "Collaboration agent who should handle a query for generating a metamodel.",
-    "version": "1.0.0",
-    "role": "collaboration agent",
-    "objective": "coordinate solution agent and supervisor agent to generate and verify metamodel based on user description.",
-    "a2aAgentCardUrl": "http://localhost:12000/.well-known/agent-card.json",
-    "deployment": {
-      "mode": "ENDPOINT"
-    }
-  }'
-```
 
 There should be two agents available in the repository (Notes: please use AgentMCPTool and search for "agent" to see the list.)
 
@@ -301,5 +303,101 @@ curl -X PUT http://localhost:8080/api/agents/{AGENT-ID-FROM-ABOVE} \
     "deployment": {
       "mode": "ENDPOINT"
     }
+  }'
+```
+
+### Clean up vector store and re-index agents
+
+If vector search returns unexpected results (e.g., `topK` doesn't match the number of results, or scores seem wrong), the vector store may have stale/duplicate entries. Follow these steps to clean up and re-index:
+
+**Step 1: Connect to the pgvector PostgreSQL database**
+
+```bash
+docker-compose -f docker-compose.langfuse.yml --env-file .env.langfuse exec pgvector psql -U mosaico -d mosaico_db
+```
+
+**Step 2: Inspect the vector_store table (optional)**
+
+```sql
+-- Check how many vector entries exist
+SELECT COUNT(*) FROM vector_store;
+
+-- View agent-related vectors
+SELECT id, metadata FROM vector_store WHERE metadata->>'entityType' = 'Agent';
+```
+
+**Step 3: Delete all agent vectors**
+
+```sql
+-- Remove all agent vectors from the vector store
+DELETE FROM vector_store WHERE metadata->>'entityType' = 'Agent';
+
+-- Verify deletion
+SELECT COUNT(*) FROM vector_store WHERE metadata->>'entityType' = 'Agent';
+```
+
+**Step 4: Exit PostgreSQL**
+
+```sql
+\q
+```
+
+**Step 5: Re-add your agents via the API**
+
+Delete existing agents (optional, if you want a fresh start):
+
+```bash
+# Get all agents
+curl -X GET 'http://localhost:8080/api/agents' -H 'accept: */*'
+
+# Delete each agent by ID
+curl -X DELETE 'http://localhost:8080/api/agents/{AGENT-ID}'
+```
+
+Re-add agents using the POST endpoint (this will automatically create new vector embeddings):
+
+```bash
+# Add aisp-mini-swe-agent
+curl -X POST http://localhost:8080/api/agents \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "aisp-mini-swe-agent",
+    "description": "Agent who solves generic software engineering issues using a bash-only tool, including write Python script, explain code, solve coding challenges.",
+    "version": "1.0.0",
+    "role": "generic software engineering solver",
+    "objective": "solves generic software engineering issues",
+    "a2aAgentCardUrl": "http://localhost:20000/.well-known/agent-card.json",
+    "deployment": {
+      "mode": "ENDPOINT"
+    }
+  }'
+
+# Add metamodel-generation-collaboration-agent
+curl -X POST http://localhost:8080/api/agents \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "metamodel-generation-collaboration-agent",
+    "description": "Collaboration agent who should handle a query for generating a metamodel.",
+    "version": "1.0.0",
+    "role": "collaboration agent",
+    "objective": "coordinate solution agent and supervisor agent to generate and verify metamodel based on user description.",
+    "a2aAgentCardUrl": "http://localhost:12000/.well-known/agent-card.json",
+    "deployment": {
+      "mode": "ENDPOINT"
+    }
+  }'
+```
+
+**Step 6: Verify vector search works correctly**
+
+Test using the MCP Inspector or curl:
+
+```bash
+# Via REST API - search with topK=2 should return 2 agents
+curl -X POST 'http://localhost:8080/api/agents/search/semantic' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "agent",
+    "topK": 2
   }'
 ```
